@@ -4,14 +4,20 @@
 [![Paperless-ngx](https://img.shields.io/badge/Paperless--ngx-Compatible-green.svg)](https://github.com/paperless-ngx/paperless-ngx)
 [![Shell Script](https://img.shields.io/badge/Shell-Bash-blue.svg)](https://www.gnu.org/software/bash/)
 
-Ein robustes Bash-Script zur automatischen Synchronisation von Dokumenten für [Paperless-ngx](https://github.com/paperless-ngx/paperless-ngx). Das Script kopiert alle unterstützten Dateiformate sicher mit `rsync` von einem Quellverzeichnis in das Paperless-Consume-Verzeichnis.
+Ein robustes Bash-Script zur automatischen Synchronisation von Dokumenten für [Paperless-ngx](https://github.com/paperless-ngx/paperless-ngx). Das Script kopiert alle unterstützten Dateiformate aus einem Quellverzeichnis (inklusive aller Unterordner) **flach** in das Paperless-Consume-Verzeichnis.
+
+## ⚠️ Wichtiger Hinweis
+
+**Paperless-ngx kann keine Unterordner im Consume-Verzeichnis verarbeiten!** Daher kopiert dieses Script alle Dateien flach in das Hauptverzeichnis. Bei Dateinamen-Konflikten werden Dateien automatisch nummeriert (_1, _2, etc.).
 
 ## 🎯 Features
 
-- ✅ **Sichere Übertragung** mit `rsync` und Checksummen-Verifikation
-- 📁 **Rekursive Verarbeitung** aller Unterordner
+- ✅ **Flache Kopie** aller Dateien ohne Unterordner-Struktur (Paperless-Anforderung)
+- 🔄 **Intelligente Konfliktbehandlung** bei doppelten Dateinamen
+- 🔍 **Checksummen-Vergleich** überspringt identische Dateien
+- 📁 **Rekursive Suche** in allen Unterordnern der Quelle
 - 📝 **Umfassende Formatunterstützung** für alle Paperless-kompatiblen Dateitypen
-- 🔍 **Testmodus** zur Vorschau ohne tatsächliche Kopie
+- 🧪 **Testmodus** mit Duplikat-Warnung
 - 📊 **Detaillierte Statistiken** nach der Synchronisation
 - 🎨 **Farbige Terminal-Ausgabe** für bessere Übersicht
 - 📜 **Vollständiges Logging** aller Operationen
@@ -49,7 +55,7 @@ chmod +x paperless-sync.sh
 Bearbeiten Sie die Pfade im Script entsprechend Ihrer Umgebung:
 ```bash
 # In paperless-sync.sh anpassen:
-SOURCE_DIR="/home/macos"  # Ihr Quellverzeichnis
+SOURCE_DIR="/home/macos"  # Ihr Quellverzeichnis (mit Unterordnern)
 DEST_DIR="/home/paper/docker/paperless-ngx/data/consume"  # Paperless Consume-Ordner
 LOG_FILE="/var/log/paperless-sync.log"  # Log-Datei Pfad
 ```
@@ -62,7 +68,7 @@ LOG_FILE="/var/log/paperless-sync.log"  # Log-Datei Pfad
 # oder
 ./paperless-sync.sh -t
 ```
-Zeigt welche Dateien synchronisiert würden, ohne sie tatsächlich zu kopieren.
+Zeigt welche Dateien kopiert würden und warnt vor Dateinamen-Konflikten.
 
 ### Normale Synchronisation
 ```bash
@@ -75,6 +81,17 @@ Zeigt welche Dateien synchronisiert würden, ohne sie tatsächlich zu kopieren.
 # oder
 ./paperless-sync.sh -h
 ```
+
+## 🔄 Funktionsweise
+
+1. **Durchsucht** rekursiv alle Unterordner im Quellverzeichnis
+2. **Findet** alle Dateien mit unterstützten Erweiterungen
+3. **Kopiert** diese flach ins Zielverzeichnis
+4. **Behandelt Konflikte:**
+   - Vergleicht Checksummen bei gleichen Dateinamen
+   - Überspringt identische Dateien
+   - Nummeriert unterschiedliche Dateien mit gleichem Namen (_1, _2, etc.)
+5. **Protokolliert** alle Aktionen
 
 ## ⚙️ Automatisierung mit Cron
 
@@ -97,13 +114,7 @@ crontab -e
 ## 🔧 Konfiguration
 
 ### Tika deaktivieren
-Falls Sie Tika nicht verwenden, kommentieren Sie die Office-Formate aus:
-```bash
-# In Zeile 91-94 des Scripts:
-# for ext in "${OFFICE_FORMATS[@]}"; do
-#     patterns="$patterns --include='*.$ext' --include='*.${ext^^}'"
-# done
-```
+Falls Sie Tika nicht verwenden, kommentieren Sie die Office-Formate im Script aus (Zeilen 42-54).
 
 ### Log-Rotation einrichten
 ```bash
@@ -131,29 +142,34 @@ pdf png jpg jpeg tiff tif gif webp txt
 Unterstützte Office-Formate (wenn Tika aktiviert):
 doc docx xls xlsx ppt pptx odt ods odp eml msg rtf 
 
-sending incremental file list
-Dokumente/Rechnung_2024.pdf
-Bilder/Scan_001.jpg
-Briefe/Brief_Versicherung.docx
+WICHTIG: Alle Dateien werden flach kopiert (ohne Unterordner-Struktur)
 
-Synchronisation erfolgreich abgeschlossen!
+Verarbeite .pdf Dateien...
+  ✓ Kopiert: Rechnung_2024.pdf → Rechnung_2024.pdf
+  ✓ Kopiert: Rechnung_2024.pdf → Rechnung_2024_1.pdf
+  Überspringe: Brief.pdf (identische Datei existiert bereits)
+
+=== Synchronisation abgeschlossen ===
+  ✓ Kopiert: 15 Datei(en)
+  ⊘ Übersprungen: 3 Datei(en) (bereits vorhanden)
 
 === Statistiken ===
-  pdf: 15 Datei(en)
+  pdf: 18 Datei(en)
   jpg: 8 Datei(en)
   docx: 3 Datei(en)
-Gesamt: 26 Datei(en) im Consume-Verzeichnis
+Gesamt: 29 Datei(en) im Consume-Verzeichnis
 
 Script beendet.
 ```
 
 ## 🛡️ Sicherheit
 
-- ✅ Verwendet `rsync --checksum` für Datenintegrität
+- ✅ MD5-Checksummen-Vergleich zur Duplikat-Erkennung
+- ✅ Automatische Konfliktbehandlung bei gleichen Dateinamen
 - ✅ Prüft Verzeichnisberechtigungen vor der Ausführung
 - ✅ Detailliertes Logging aller Operationen
-- ✅ Fehlerbehandlung mit aussagekräftigen Meldungen
 - ✅ Keine Änderung der Originaldateien
+- ✅ Sichere Dateinamen-Behandlung mit Null-Byte-Separation
 
 ## 🐛 Fehlerbehebung
 
@@ -166,18 +182,6 @@ ls -la /home/paper/docker/paperless-ngx/data/consume/
 sudo chown -R $USER:$USER /home/paper/docker/paperless-ngx/data/consume/
 ```
 
-### rsync nicht installiert
-```bash
-# Debian/Ubuntu
-sudo apt-get install rsync
-
-# RHEL/CentOS
-sudo yum install rsync
-
-# macOS
-brew install rsync
-```
-
 ### Log-Datei nicht beschreibbar
 ```bash
 # Log-Verzeichnis erstellen und Rechte setzen
@@ -186,11 +190,17 @@ sudo touch /var/log/paperless-sync.log
 sudo chown $USER:$USER /var/log/paperless-sync.log
 ```
 
+### Viele Namenskonflikte
+Wenn Sie viele Dateien mit gleichen Namen aus verschiedenen Ordnern haben, erwägen Sie:
+- Dateien vor dem Sync umzubenennen
+- Ein Naming-Schema mit Ordnernamen im Dateinamen zu verwenden
+
 ## 📝 Anforderungen
 
 - **Bash** 4.0 oder höher
-- **rsync** 3.0 oder höher
 - **find** (Standard Unix-Tool)
+- **cp** (Standard Unix-Tool) 
+- **md5sum** (Standard Unix-Tool)
 - Schreibrechte für das Zielverzeichnis
 - Optional: **Paperless-ngx mit Tika** für Office-Dokumente
 
@@ -210,7 +220,6 @@ Dieses Projekt ist unter der MIT-Lizenz lizenziert - siehe [LICENSE](LICENSE) Da
 
 - [Paperless-ngx Dokumentation](https://docs.paperless-ngx.com/)
 - [Paperless-ngx GitHub](https://github.com/paperless-ngx/paperless-ngx)
-- [rsync Dokumentation](https://rsync.samba.org/documentation.html)
 
 ## 👤 Autor
 
