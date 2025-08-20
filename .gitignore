@@ -1,0 +1,11 @@
+# Paperless-ngx installieren
+/consume/
+*.log
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+__pycache__/
+*.pyc
