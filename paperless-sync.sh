@@ -7,6 +7,9 @@
 # von /home/macos (inkl. Unterordner) nach
 # /home/paper/docker/paperless-ngx/data/consume/
 # mit rsync für sichere und geprüfte Übertragung
+# 
+# WICHTIG: Alle Dateien werden flach ins Zielverzeichnis
+# kopiert, da Paperless keine Unterordner verarbeiten kann!
 #################################################
 
 # Konfiguration
@@ -80,28 +83,53 @@ check_directories() {
     fi
 }
 
-# Erstelle rsync Include-Pattern
-create_include_patterns() {
-    local patterns=""
+# Funktion zum Kopieren mit Konfliktbehandlung
+copy_with_conflict_handling() {
+    local src_file="$1"
+    local filename=$(basename "$src_file")
+    local dest_file="$DEST_DIR/$filename"
+    local base_name="${filename%.*}"
+    local extension="${filename##*.}"
+    local counter=1
     
-    # Füge Basis-Formate hinzu
-    for ext in "${BASE_FORMATS[@]}"; do
-        patterns="$patterns --include='*.$ext' --include='*.${ext^^}'"
+    # Falls Datei bereits existiert, füge Nummer hinzu
+    while [ -f "$dest_file" ]; do
+        # Prüfe ob die Dateien identisch sind (gleiche Checksumme)
+        if [ -f "$dest_file" ]; then
+            src_checksum=$(md5sum "$src_file" | cut -d' ' -f1)
+            dest_checksum=$(md5sum "$dest_file" | cut -d' ' -f1)
+            
+            if [ "$src_checksum" = "$dest_checksum" ]; then
+                echo "  Überspringe: $filename (identische Datei existiert bereits)"
+                return 0
+            fi
+        fi
+        
+        # Erstelle neuen Dateinamen mit Zähler
+        if [ "$base_name" = "$filename" ]; then
+            # Datei hat keine Erweiterung
+            dest_file="$DEST_DIR/${filename}_${counter}"
+        else
+            dest_file="$DEST_DIR/${base_name}_${counter}.${extension}"
+        fi
+        counter=$((counter + 1))
     done
     
-    # Optional: Füge Office-Formate hinzu wenn Tika verfügbar ist
-    # (Kommentieren Sie die nächsten Zeilen aus, wenn Sie Tika nicht verwenden)
-    for ext in "${OFFICE_FORMATS[@]}"; do
-        patterns="$patterns --include='*.$ext' --include='*.${ext^^}'"
-    done
-    
-    echo "$patterns"
+    # Kopiere Datei
+    cp -p "$src_file" "$dest_file"
+    if [ $? -eq 0 ]; then
+        echo -e "  ${GREEN}✓${NC} Kopiert: $(basename "$src_file") → $(basename "$dest_file")"
+        log_message "Kopiert: $src_file → $dest_file"
+        return 0
+    else
+        echo -e "  ${RED}✗${NC} Fehler beim Kopieren: $filename"
+        log_message "FEHLER beim Kopieren: $src_file"
+        return 1
+    fi
 }
 
-# Hauptfunktion für rsync
+# Hauptfunktion für Synchronisation
 sync_documents() {
-    local include_patterns=$(create_include_patterns)
-    
     echo -e "${GREEN}Starte Synchronisation...${NC}"
     log_message "Starte Synchronisation von $SOURCE_DIR nach $DEST_DIR"
     
@@ -113,50 +141,47 @@ sync_documents() {
     printf '%s ' "${OFFICE_FORMATS[@]}"
     echo -e "\n"
     
-    # Führe rsync aus
-    # -a: Archiv-Modus (erhält Berechtigungen, Zeitstempel etc.)
-    # -v: Verbose (zeigt kopierte Dateien)
-    # --progress: Zeigt Fortschritt
-    # --checksum: Prüft Dateien via Checksumme statt nur Größe/Zeit
-    # --dry-run: Testlauf (entfernen für echte Synchronisation)
+    echo -e "${YELLOW}WICHTIG: Alle Dateien werden flach kopiert (ohne Unterordner-Struktur)${NC}\n"
     
-    # Erstelle temporäre Include-Datei für bessere Übersicht
-    INCLUDE_FILE=$(mktemp)
+    # Zähler für Statistik
+    local copied_count=0
+    local skipped_count=0
+    local error_count=0
     
-    # Schreibe alle Include-Patterns in die Datei
-    for ext in "${BASE_FORMATS[@]}" "${OFFICE_FORMATS[@]}"; do
-        echo "*.$ext" >> "$INCLUDE_FILE"
-        echo "*.${ext^^}" >> "$INCLUDE_FILE"
+    # Erstelle Liste aller unterstützten Erweiterungen
+    local all_formats=("${BASE_FORMATS[@]}" "${OFFICE_FORMATS[@]}")
+    
+    # Durchsuche alle Dateien im Quellverzeichnis
+    for ext in "${all_formats[@]}"; do
+        echo -e "\n${YELLOW}Verarbeite .$ext Dateien...${NC}"
+        
+        # Finde alle Dateien mit dieser Erweiterung (case-insensitive)
+        while IFS= read -r -d '' file; do
+            copy_with_conflict_handling "$file"
+            case $? in
+                0)
+                    if [[ $(basename "$file") == *"identische Datei"* ]]; then
+                        ((skipped_count++))
+                    else
+                        ((copied_count++))
+                    fi
+                    ;;
+                1)
+                    ((error_count++))
+                    ;;
+            esac
+        done < <(find "$SOURCE_DIR" -type f \( -iname "*.$ext" \) -print0 2>/dev/null)
     done
     
-    # rsync Befehl mit allen Optionen
-    rsync -av \
-        --progress \
-        --checksum \
-        --include-from="$INCLUDE_FILE" \
-        --include='*/' \
-        --exclude='*' \
-        --log-file="$LOG_FILE" \
-        "$SOURCE_DIR/" \
-        "$DEST_DIR/"
-    
-    RSYNC_STATUS=$?
-    
-    # Aufräumen
-    rm -f "$INCLUDE_FILE"
-    
-    # Prüfe rsync Status
-    if [ $RSYNC_STATUS -eq 0 ]; then
-        echo -e "${GREEN}Synchronisation erfolgreich abgeschlossen!${NC}"
-        log_message "Synchronisation erfolgreich abgeschlossen"
-    elif [ $RSYNC_STATUS -eq 23 ]; then
-        echo -e "${YELLOW}Synchronisation abgeschlossen mit Warnungen (einige Dateien konnten nicht übertragen werden)${NC}"
-        log_message "Synchronisation mit Warnungen abgeschlossen (Code: $RSYNC_STATUS)"
-    else
-        echo -e "${RED}Fehler bei der Synchronisation! (Code: $RSYNC_STATUS)${NC}"
-        log_message "Fehler bei der Synchronisation (Code: $RSYNC_STATUS)"
-        exit $RSYNC_STATUS
+    # Zeige Zusammenfassung
+    echo -e "\n${GREEN}=== Synchronisation abgeschlossen ===${NC}"
+    echo -e "  ${GREEN}✓${NC} Kopiert: $copied_count Datei(en)"
+    echo -e "  ${YELLOW}⊘${NC} Übersprungen: $skipped_count Datei(en) (bereits vorhanden)"
+    if [ $error_count -gt 0 ]; then
+        echo -e "  ${RED}✗${NC} Fehler: $error_count Datei(en)"
     fi
+    
+    log_message "Synchronisation abgeschlossen - Kopiert: $copied_count, Übersprungen: $skipped_count, Fehler: $error_count"
 }
 
 # Zeige Statistiken
@@ -166,7 +191,7 @@ show_statistics() {
     # Zähle Dateien im Zielverzeichnis
     local total_files=0
     for ext in "${BASE_FORMATS[@]}" "${OFFICE_FORMATS[@]}"; do
-        count=$(find "$DEST_DIR" -type f \( -iname "*.$ext" \) 2>/dev/null | wc -l)
+        count=$(find "$DEST_DIR" -maxdepth 1 -type f \( -iname "*.$ext" \) 2>/dev/null | wc -l)
         if [ $count -gt 0 ]; then
             echo "  $ext: $count Datei(en)"
             total_files=$((total_files + count))
@@ -182,18 +207,40 @@ test_run() {
     echo "Dies ist ein Testlauf. Es werden keine Dateien kopiert."
     echo ""
     
+    echo -e "${YELLOW}WICHTIG: Alle Dateien werden flach kopiert (ohne Unterordner-Struktur)${NC}\n"
+    
     echo "Suche nach unterstützten Dateien in $SOURCE_DIR..."
     local file_count=0
+    local duplicate_warning=false
+    
+    # Temporäres Array für Dateinamen zur Duplikat-Prüfung
+    declare -A filenames
     
     for ext in "${BASE_FORMATS[@]}" "${OFFICE_FORMATS[@]}"; do
-        count=$(find "$SOURCE_DIR" -type f \( -iname "*.$ext" \) 2>/dev/null | wc -l)
-        if [ $count -gt 0 ]; then
-            echo "  .$ext: $count Datei(en) gefunden"
-            file_count=$((file_count + count))
-        fi
+        while IFS= read -r -d '' file; do
+            basename_file=$(basename "$file")
+            if [ -n "${filenames[$basename_file]}" ]; then
+                if [ "$duplicate_warning" = false ]; then
+                    echo -e "\n${YELLOW}WARNUNG: Namenskonflikte erkannt!${NC}"
+                    echo "Folgende Dateien haben identische Namen (aus verschiedenen Ordnern):"
+                    duplicate_warning=true
+                fi
+                echo -e "  ${YELLOW}!${NC} $basename_file"
+                echo "    - ${filenames[$basename_file]}"
+                echo "    - $file"
+            else
+                filenames[$basename_file]="$file"
+            fi
+            ((file_count++))
+        done < <(find "$SOURCE_DIR" -type f \( -iname "*.$ext" \) -print0 2>/dev/null)
     done
     
     echo -e "\n${GREEN}Gesamt: $file_count Datei(en) würden synchronisiert werden${NC}"
+    
+    if [ "$duplicate_warning" = true ]; then
+        echo -e "\n${YELLOW}Hinweis: Bei Namenskonflikten werden Dateien automatisch nummeriert (_1, _2, etc.)${NC}"
+    fi
+    
     echo -e "\nFühren Sie das Script ohne --test aus, um die Synchronisation durchzuführen."
 }
 
@@ -224,6 +271,9 @@ main() {
         echo "  -h, --help    Zeigt diese Hilfe"
         echo ""
         echo "Ohne Optionen wird die Synchronisation durchgeführt."
+        echo ""
+        echo "WICHTIG: Alle Dateien werden flach ins Zielverzeichnis kopiert,"
+        echo "         da Paperless keine Unterordner verarbeiten kann!"
         exit 0
     fi
     
