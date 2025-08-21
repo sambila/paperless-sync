@@ -1,5 +1,4 @@
 #!/bin/bash
-set -e  # Beende bei Fehlern
 
 #################################################
 # Paperless-ngx Remote Document Sync Script
@@ -14,10 +13,10 @@ set -e  # Beende bei Fehlern
 
 # Konfiguration
 SOURCE_DIR="$HOME/Documents"  # Lokales Verzeichnis auf macOS (anpassen!)
-REMOTE_HOST="10.10.1.1"
-REMOTE_USER="paper"
-REMOTE_DIR="/home/paper/docker/paperless-ngx/data/consume"
-LOG_FILE="$HOME/Library/Logs/paperless-sync.log"
+REMOTE_HOST="1.2.3.4"
+REMOTE_USER="pp"
+REMOTE_DIR="/home/pp/docker/paperless-ngx/data/consume"
+LOG_FILE="$HOME./paperless-sync.log"
 TIMESTAMP=$(date '+%Y-%m-%d %H:%M:%S')
 
 # SSH Optionen
@@ -66,10 +65,10 @@ log_message() {
     echo "[$TIMESTAMP] $1" | tee -a "$LOG_FILE"
     
     # Erstelle Log-Verzeichnis falls nicht vorhanden (macOS spezifisch)
-  
-if [ ! -d "$(dirname "$LOG_FILE")" ]; then
-    mkdir -p "$(dirname "$LOG_FILE")"
-fi
+    if [ ! -d "$(dirname "$LOG_FILE")" ]; then
+        mkdir -p "$(dirname "$LOG_FILE")"
+    fi
+}
 
 # SSH Verbindung testen
 test_ssh_connection() {
@@ -157,7 +156,7 @@ create_find_conditions() {
 }
 
 # Hauptfunktion für Synchronisation
- sync_documents() {
+sync_documents() {
     echo -e "${GREEN}Starte Remote-Synchronisation...${NC}"
     log_message "Starte Synchronisation von $SOURCE_DIR nach $REMOTE_USER@$REMOTE_HOST:$REMOTE_DIR"
     
@@ -219,7 +218,7 @@ create_find_conditions() {
         echo -n "  Kopiere: $original_filename → $filename ... "
         
         # Kopiere Datei mit rsync
-        rsync -av \
+        rsync -n -av \
             -e "$SSH_CMD" \
             --checksum \
             "$file" \
@@ -243,19 +242,6 @@ create_find_conditions() {
         fi
     done < "$TEMP_FILE_LIST"
     
-    # Aufräumen
-    rm -f "$TEMP_FILE_LIST"
-    
-    # Zeige Zusammenfassung
-    echo -e "\n${GREEN}=== Synchronisation abgeschlossen ===${NC}"
-    echo -e "  ${GREEN}✓${NC} Kopiert: $copied Datei(en)"
-    echo -e "  ${YELLOW}⊘${NC} Übersprungen: $skipped Datei(en)"
-    if [ $failed -gt 0 ]; then
-        echo -e "  ${RED}✗${NC} Fehler: $failed Datei(en)"
-    fi
-    
-    log_message "Synchronisation abgeschlossen - Kopiert: $copied, Übersprungen: $skipped, Fehler: $failed"
-}
     # Aufräumen
     rm -f "$TEMP_FILE_LIST"
     
@@ -294,6 +280,7 @@ show_statistics() {
         echo \"Gesamt: \$total Datei(en) im Remote Consume-Verzeichnis\"
     "
 }
+
 # Testmodus-Funktion
 test_run() {
     echo -e "${YELLOW}=== TESTMODUS ===${NC}"
