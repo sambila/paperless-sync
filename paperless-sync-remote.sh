@@ -13,10 +13,10 @@
 
 # Konfiguration
 SOURCE_DIR="$HOME/Documents"  # Lokales Verzeichnis auf macOS (anpassen!)
-REMOTE_HOST="1.2.3.4"
-REMOTE_USER="pp"
-REMOTE_DIR="/home/pp/docker/paperless-ngx/data/consume"
-LOG_FILE="./paperless-sync.log"
+REMOTE_HOST="10.10.1.1"
+REMOTE_USER="paper"
+REMOTE_DIR="/home/paper/docker/paperless-ngx/data/consume"
+LOG_FILE="$HOME/Library/Logs/paperless-sync.log"
 TIMESTAMP=$(date '+%Y-%m-%d %H:%M:%S')
 
 # SSH Optionen
@@ -135,26 +135,6 @@ check_directories() {
     fi
 }
 
-# Funktion zum Erstellen der find-Bedingungen (macOS-kompatibel)
-create_find_conditions() {
-    local conditions=""
-    local first=true
-    
-    for ext in "${BASE_FORMATS[@]}" "${OFFICE_FORMATS[@]}"; do
-        if [ "$first" = true ]; then
-            conditions="-iname '*.$ext'"
-            first=false
-        else
-            conditions="$conditions -o -iname '*.$ext'"
-        fi
-        # Für Großschreibung (macOS-kompatibel ohne ${var^^})
-        ext_upper=$(echo "$ext" | tr '[:lower:]' '[:upper:]')
-        conditions="$conditions -o -iname '*.$ext_upper'"
-    done
-    
-    echo "$conditions"
-}
-
 # Hauptfunktion für Synchronisation
 sync_documents() {
     echo -e "${GREEN}Starte Remote-Synchronisation...${NC}"
@@ -170,7 +150,7 @@ sync_documents() {
     
     echo -e "${YELLOW}WICHTIG: Alle Dateien werden flach kopiert (ohne Unterordner-Struktur)${NC}\n"
     
-    # Baue SSH Befehl für rsync (konsistent mit anderen Funktionen)
+    # Baue SSH Befehl für rsync
     local SSH_CMD="ssh -p $SSH_PORT"
     if [ -n "$SSH_KEY" ]; then
         SSH_CMD="$SSH_CMD -i $SSH_KEY"
@@ -178,10 +158,10 @@ sync_documents() {
     
     echo -e "${BLUE}Synchronisiere Dateien...${NC}"
     
-    # Zähler für Statistik
-local copied=0
-local skipped=0
-local failed=0
+    # Zähler für Statistik - WICHTIG: Initialisierung!
+    copied=0
+    skipped=0
+    failed=0
     
     # Erstelle temporäre Datei für Dateiliste
     TEMP_FILE_LIST=$(mktemp)
@@ -192,11 +172,8 @@ local failed=0
     # Baue find-Befehl für alle Formate
     echo "Suche Dateien..."
     for ext in "${BASE_FORMATS[@]}" "${OFFICE_FORMATS[@]}"; do
-        # Suche nach Kleinschreibung
+        # Suche case-insensitive
         find . -type f -iname "*.$ext" >> "$TEMP_FILE_LIST" 2>/dev/null
-        # Suche nach Großschreibung
-        ext_upper=$(echo "$ext" | tr '[:lower:]' '[:upper:]')
-        find . -type f -iname "*.$ext_upper" >> "$TEMP_FILE_LIST" 2>/dev/null
     done
     
     # Sortiere und entferne Duplikate
@@ -211,13 +188,17 @@ local failed=0
     while IFS= read -r file; do
         # Entferne führendes ./ und hole nur Dateinamen
         original_filename=$(basename "$file")
-        # Entferne Leerzeichen und Sonderzeichen aus Dateinamen (inklusive $)
-        filename=$(echo "$original_filename" | tr ' ' '_' | tr -d '()[]{}' | tr -s '_' | sed 's/\$/_/g')
+        # Entferne Leerzeichen und Sonderzeichen aus Dateinamen
+        filename=$(echo "$original_filename" | tr ' ' '_' | tr -d '()[]{}$' | tr -s '_')
         
         # Zeige Fortschritt
-        echo -n "  Kopiere: $original_filename → $filename ... "
+        if [ "$original_filename" != "$filename" ]; then
+            echo -n "  Kopiere: $original_filename → $filename ... "
+        else
+            echo -n "  Kopiere: $filename ... "
+        fi
         
-        # Kopiere Datei mit rsync (mit escaping)
+        # Kopiere Datei mit rsync
         rsync -av \
             -e "$SSH_CMD" \
             --checksum \
@@ -229,7 +210,7 @@ local failed=0
             ((copied++))
             log_message "Kopiert: $file → $REMOTE_DIR/$filename"
         else
-            # Prüfe ob Datei bereits existiert (mit escaping)
+            # Prüfe ob Datei bereits existiert
             $SSH_CMD "$REMOTE_USER@$REMOTE_HOST" "test -f \"$REMOTE_DIR/$filename\"" 2>/dev/null
             if [ $? -eq 0 ]; then
                 echo -e "${YELLOW}⊘ (existiert bereits)${NC}"
@@ -245,25 +226,13 @@ local failed=0
     # Aufräumen
     rm -f "$TEMP_FILE_LIST"
     
-# Zeige Zusammenfassung
-echo -e "\n${GREEN}=== Synchronisation abgeschlossen ===${NC}"
-echo -e "  ${GREEN}✓${NC} Kopiert: ${copied:-0} Datei(en)"
-echo -e "  ${YELLOW}⊘${NC} Übersprungen: ${skipped:-0} Datei(en)"
-if [ ${failed:-0} -gt 0 ]; then
-    echo -e "  ${RED}✗${NC} Fehler: ${failed:-0} Datei(en)"
-fi
-
-    log_message "Synchronisation abgeschlossen - Kopiert: ${copied:-0}, Übersprungen: ${skipped:-0}, Fehler: ${failed:-0}"
-    
-}    
-    # Aufräumen
-    rm -f "$TEMP_FILE_LIST"
-    
-    # Zeige Zusammenfassung
+    # Zeige Zusammenfassung - NUR EINMAL!
     echo -e "\n${GREEN}=== Synchronisation abgeschlossen ===${NC}"
     echo -e "  ${GREEN}✓${NC} Kopiert: $copied Datei(en)"
     echo -e "  ${YELLOW}⊘${NC} Übersprungen: $skipped Datei(en)"
-    if [ $failed -gt 0 ]; then
+    
+    # Prüfe ob failed größer als 0 ist
+    if [ "$failed" -gt 0 ]; then
         echo -e "  ${RED}✗${NC} Fehler: $failed Datei(en)"
     fi
     
@@ -332,10 +301,19 @@ test_run() {
     # Zeige ein paar Beispieldateien
     if [ $file_count -gt 0 ]; then
         echo -e "\n${BLUE}Beispiel-Dateien (max. 5):${NC}"
+        local shown=0
         for ext in "${BASE_FORMATS[@]}" "${OFFICE_FORMATS[@]}"; do
             find "$SOURCE_DIR" -type f -iname "*.$ext" -print 2>/dev/null | head -5 | while IFS= read -r file; do
-                echo "  - $(basename "$file")"
-                break
+                if [ $shown -lt 5 ]; then
+                    basename=$(basename "$file")
+                    cleaned=$(echo "$basename" | tr ' ' '_' | tr -d '()[]{}$' | tr -s '_')
+                    if [ "$basename" != "$cleaned" ]; then
+                        echo "  - $basename → $cleaned"
+                    else
+                        echo "  - $basename"
+                    fi
+                    shown=$((shown + 1))
+                fi
             done
         done
     fi
