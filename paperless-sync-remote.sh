@@ -179,9 +179,9 @@ sync_documents() {
     echo -e "${BLUE}Synchronisiere Dateien...${NC}"
     
     # Zähler für Statistik
-    local copied=0
-    local failed=0
-    local skipped=0
+local copied=0
+local skipped=0
+local failed=0
     
     # Erstelle temporäre Datei für Dateiliste
     TEMP_FILE_LIST=$(mktemp)
@@ -245,15 +245,16 @@ sync_documents() {
     # Aufräumen
     rm -f "$TEMP_FILE_LIST"
     
-    # Zeige Zusammenfassung
-    echo -e "\n${GREEN}=== Synchronisation abgeschlossen ===${NC}"
-    echo -e "  ${GREEN}✓${NC} Kopiert: $copied Datei(en)"
-    echo -e "  ${YELLOW}⊘${NC} Übersprungen: $skipped Datei(en)"
-    if [ $failed -gt 0 ]; then
-        echo -e "  ${RED}✗${NC} Fehler: $failed Datei(en)"
-    fi
+# Zeige Zusammenfassung
+echo -e "\n${GREEN}=== Synchronisation abgeschlossen ===${NC}"
+echo -e "  ${GREEN}✓${NC} Kopiert: ${copied:-0} Datei(en)"
+echo -e "  ${YELLOW}⊘${NC} Übersprungen: ${skipped:-0} Datei(en)"
+if [ ${failed:-0} -gt 0 ]; then
+    echo -e "  ${RED}✗${NC} Fehler: ${failed:-0} Datei(en)"
+fi
+
+    log_message "Synchronisation abgeschlossen - Kopiert: ${copied:-0}, Übersprungen: ${skipped:-0}, Fehler: ${failed:-0}"
     
-    log_message "Synchronisation abgeschlossen - Kopiert: $copied, Übersprungen: $skipped, Fehler: $failed"
 }    
     # Aufräumen
     rm -f "$TEMP_FILE_LIST"
