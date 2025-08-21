@@ -1,4 +1,5 @@
 #!/bin/bash
+set -e  # Beende bei Fehlern
 
 #################################################
 # Paperless-ngx Remote Document Sync Script
@@ -65,10 +66,10 @@ log_message() {
     echo "[$TIMESTAMP] $1" | tee -a "$LOG_FILE"
     
     # Erstelle Log-Verzeichnis falls nicht vorhanden (macOS spezifisch)
-    if [ ! -d "$(dirname "$LOG_FILE")" ]; then
-        mkdir -p "$(dirname "$LOG_FILE")"
-    fi
-}
+  
+if [ ! -d "$(dirname "$LOG_FILE")" ]; then
+    mkdir -p "$(dirname "$LOG_FILE")"
+fi
 
 # SSH Verbindung testen
 test_ssh_connection() {
@@ -156,7 +157,7 @@ create_find_conditions() {
 }
 
 # Hauptfunktion für Synchronisation
-sync_documents() {
+ sync_documents() {
     echo -e "${GREEN}Starte Remote-Synchronisation...${NC}"
     log_message "Starte Synchronisation von $SOURCE_DIR nach $REMOTE_USER@$REMOTE_HOST:$REMOTE_DIR"
     
@@ -170,11 +171,10 @@ sync_documents() {
     
     echo -e "${YELLOW}WICHTIG: Alle Dateien werden flach kopiert (ohne Unterordner-Struktur)${NC}\n"
     
-    # Baue rsync SSH Befehl
+    # Baue SSH Befehl für rsync (konsistent mit anderen Funktionen)
+    local SSH_CMD="ssh -p $SSH_PORT"
     if [ -n "$SSH_KEY" ]; then
-        RSYNC_SSH="ssh -p $SSH_PORT -i $SSH_KEY"
-    else
-        RSYNC_SSH="ssh -p $SSH_PORT"
+        SSH_CMD="$SSH_CMD -i $SSH_KEY"
     fi
     
     echo -e "${BLUE}Synchronisiere Dateien...${NC}"
@@ -195,6 +195,9 @@ sync_documents() {
     for ext in "${BASE_FORMATS[@]}" "${OFFICE_FORMATS[@]}"; do
         # Suche nach Kleinschreibung
         find . -type f -iname "*.$ext" >> "$TEMP_FILE_LIST" 2>/dev/null
+        # Suche nach Großschreibung
+        ext_upper=$(echo "$ext" | tr '[:lower:]' '[:upper:]')
+        find . -type f -iname "*.$ext_upper" >> "$TEMP_FILE_LIST" 2>/dev/null
     done
     
     # Sortiere und entferne Duplikate
@@ -208,14 +211,16 @@ sync_documents() {
     # Kopiere jede Datei einzeln (flach)
     while IFS= read -r file; do
         # Entferne führendes ./ und hole nur Dateinamen
-        filename=$(basename "$file")
+        original_filename=$(basename "$file")
+        # Entferne Leerzeichen und Sonderzeichen aus Dateinamen
+        filename=$(echo "$original_filename" | tr ' ' '_' | tr -d '()[]{}' | tr -s '_')
         
         # Zeige Fortschritt
-        echo -n "  Kopiere: $filename ... "
+        echo -n "  Kopiere: $original_filename → $filename ... "
         
         # Kopiere Datei mit rsync
         rsync -av \
-            -e "$RSYNC_SSH" \
+            -e "$SSH_CMD" \
             --checksum \
             "$file" \
             "$REMOTE_USER@$REMOTE_HOST:$REMOTE_DIR/$filename" > /dev/null 2>&1
@@ -251,12 +256,26 @@ sync_documents() {
     
     log_message "Synchronisation abgeschlossen - Kopiert: $copied, Übersprungen: $skipped, Fehler: $failed"
 }
+    # Aufräumen
+    rm -f "$TEMP_FILE_LIST"
+    
+    # Zeige Zusammenfassung
+    echo -e "\n${GREEN}=== Synchronisation abgeschlossen ===${NC}"
+    echo -e "  ${GREEN}✓${NC} Kopiert: $copied Datei(en)"
+    echo -e "  ${YELLOW}⊘${NC} Übersprungen: $skipped Datei(en)"
+    if [ $failed -gt 0 ]; then
+        echo -e "  ${RED}✗${NC} Fehler: $failed Datei(en)"
+    fi
+    
+    log_message "Synchronisation abgeschlossen - Kopiert: $copied, Übersprungen: $skipped, Fehler: $failed"
+}
 
 # Zeige Statistiken
 show_statistics() {
     echo -e "\n${GREEN}=== Remote Statistiken ===${NC}"
     
-    SSH_CMD="ssh -p $SSH_PORT"
+    # Konsistente SSH_CMD Definition
+    local SSH_CMD="ssh -p $SSH_PORT"
     if [ -n "$SSH_KEY" ]; then
         SSH_CMD="$SSH_CMD -i $SSH_KEY"
     fi
@@ -275,7 +294,6 @@ show_statistics() {
         echo \"Gesamt: \$total Datei(en) im Remote Consume-Verzeichnis\"
     "
 }
-
 # Testmodus-Funktion
 test_run() {
     echo -e "${YELLOW}=== TESTMODUS ===${NC}"
