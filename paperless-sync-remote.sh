@@ -16,7 +16,7 @@ SOURCE_DIR="$HOME/Documents"  # Lokales Verzeichnis auf macOS (anpassen!)
 REMOTE_HOST="1.2.3.4"
 REMOTE_USER="pp"
 REMOTE_DIR="/home/pp/docker/paperless-ngx/data/consume"
-LOG_FILE="$HOME./paperless-sync.log"
+LOG_FILE="./paperless-sync.log"
 TIMESTAMP=$(date '+%Y-%m-%d %H:%M:%S')
 
 # SSH Optionen
