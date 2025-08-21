@@ -135,18 +135,24 @@ check_directories() {
     fi
 }
 
-# Erstelle temporäre Include-Datei für rsync
-create_include_file() {
-    local temp_file=$(mktemp)
+# Funktion zum Erstellen der find-Bedingungen (macOS-kompatibel)
+create_find_conditions() {
+    local conditions=""
+    local first=true
     
-    # Füge alle unterstützten Formate hinzu
     for ext in "${BASE_FORMATS[@]}" "${OFFICE_FORMATS[@]}"; do
-        echo "*.$ext" >> "$temp_file"
-        echo "*.${ext^^}" >> "$temp_file"  # Großschreibung
-        echo "*.${ext,,}" >> "$temp_file"  # Kleinschreibung
+        if [ "$first" = true ]; then
+            conditions="-iname '*.$ext'"
+            first=false
+        else
+            conditions="$conditions -o -iname '*.$ext'"
+        fi
+        # Für Großschreibung (macOS-kompatibel ohne ${var^^})
+        ext_upper=$(echo "$ext" | tr '[:lower:]' '[:upper:]')
+        conditions="$conditions -o -iname '*.$ext_upper'"
     done
     
-    echo "$temp_file"
+    echo "$conditions"
 }
 
 # Hauptfunktion für Synchronisation
@@ -164,60 +170,86 @@ sync_documents() {
     
     echo -e "${YELLOW}WICHTIG: Alle Dateien werden flach kopiert (ohne Unterordner-Struktur)${NC}\n"
     
-    # Erstelle Include-Datei
-    INCLUDE_FILE=$(create_include_file)
-    
-    # Baue rsync Befehl
-    RSYNC_CMD="rsync -av --progress"
-    
-    # SSH-Optionen für rsync
+    # Baue rsync SSH Befehl
     if [ -n "$SSH_KEY" ]; then
         RSYNC_SSH="ssh -p $SSH_PORT -i $SSH_KEY"
     else
         RSYNC_SSH="ssh -p $SSH_PORT"
     fi
     
-    # rsync Optionen:
-    # -a: Archiv-Modus
-    # -v: Verbose
-    # --progress: Zeigt Fortschritt
-    # --include-from: Nur bestimmte Dateitypen
-    # --include='*/' : Durchsuche alle Unterordner
-    # --exclude='*': Schließe alles andere aus
-    # --no-relative: Keine Ordnerstruktur beibehalten
-    # --backup: Erstelle Backup bei Namenskonflikten
-    # --suffix: Suffix für Backups
-    
     echo -e "${BLUE}Synchronisiere Dateien...${NC}"
     
-    # Führe rsync aus - WICHTIG: flatten structure mit speziellen Optionen
+    # Zähler für Statistik
+    local copied=0
+    local failed=0
+    local skipped=0
+    
+    # Erstelle temporäre Datei für Dateiliste
+    TEMP_FILE_LIST=$(mktemp)
+    
+    # Finde alle relevanten Dateien
     cd "$SOURCE_DIR"
-    find . -type f \( \
-        $(printf -- "-iname '*.%s' -o " "${BASE_FORMATS[@]}" "${OFFICE_FORMATS[@]}" | sed 's/ -o $//') \
-    \) -print0 | while IFS= read -r -d '' file; do
-        # Entferne führendes ./ und Pfad, behalte nur Dateinamen
-        filename=$(basename "$file")
-        
-        # Kopiere einzelne Datei flach
-        rsync -av \
-            -e "$RSYNC_SSH" \
-            --progress \
-            --checksum \
-            "$file" \
-            "$REMOTE_USER@$REMOTE_HOST:$REMOTE_DIR/$filename"
-        
-        if [ $? -eq 0 ]; then
-            echo -e "  ${GREEN}✓${NC} $filename"
-        else
-            echo -e "  ${RED}✗${NC} Fehler bei: $filename"
-        fi
+    
+    # Baue find-Befehl für alle Formate
+    echo "Suche Dateien..."
+    for ext in "${BASE_FORMATS[@]}" "${OFFICE_FORMATS[@]}"; do
+        # Suche nach Kleinschreibung
+        find . -type f -iname "*.$ext" >> "$TEMP_FILE_LIST" 2>/dev/null
     done
     
-    # Aufräumen
-    rm -f "$INCLUDE_FILE"
+    # Sortiere und entferne Duplikate
+    sort -u "$TEMP_FILE_LIST" -o "$TEMP_FILE_LIST"
     
-    echo -e "\n${GREEN}Synchronisation abgeschlossen!${NC}"
-    log_message "Synchronisation abgeschlossen"
+    # Zähle gefundene Dateien
+    total_files=$(wc -l < "$TEMP_FILE_LIST")
+    echo "Gefunden: $total_files Datei(en)"
+    echo ""
+    
+    # Kopiere jede Datei einzeln (flach)
+    while IFS= read -r file; do
+        # Entferne führendes ./ und hole nur Dateinamen
+        filename=$(basename "$file")
+        
+        # Zeige Fortschritt
+        echo -n "  Kopiere: $filename ... "
+        
+        # Kopiere Datei mit rsync
+        rsync -av \
+            -e "$RSYNC_SSH" \
+            --checksum \
+            "$file" \
+            "$REMOTE_USER@$REMOTE_HOST:$REMOTE_DIR/$filename" > /dev/null 2>&1
+        
+        if [ $? -eq 0 ]; then
+            echo -e "${GREEN}✓${NC}"
+            ((copied++))
+            log_message "Kopiert: $file → $REMOTE_DIR/$filename"
+        else
+            # Prüfe ob Datei bereits existiert
+            $SSH_CMD "$REMOTE_USER@$REMOTE_HOST" "test -f '$REMOTE_DIR/$filename'" 2>/dev/null
+            if [ $? -eq 0 ]; then
+                echo -e "${YELLOW}⊘ (existiert bereits)${NC}"
+                ((skipped++))
+            else
+                echo -e "${RED}✗${NC}"
+                ((failed++))
+                log_message "FEHLER beim Kopieren: $file"
+            fi
+        fi
+    done < "$TEMP_FILE_LIST"
+    
+    # Aufräumen
+    rm -f "$TEMP_FILE_LIST"
+    
+    # Zeige Zusammenfassung
+    echo -e "\n${GREEN}=== Synchronisation abgeschlossen ===${NC}"
+    echo -e "  ${GREEN}✓${NC} Kopiert: $copied Datei(en)"
+    echo -e "  ${YELLOW}⊘${NC} Übersprungen: $skipped Datei(en)"
+    if [ $failed -gt 0 ]; then
+        echo -e "  ${RED}✗${NC} Fehler: $failed Datei(en)"
+    fi
+    
+    log_message "Synchronisation abgeschlossen - Kopiert: $copied, Übersprungen: $skipped, Fehler: $failed"
 }
 
 # Zeige Statistiken
@@ -231,9 +263,9 @@ show_statistics() {
     
     # Zähle Dateien auf dem Remote-Server
     $SSH_CMD "$REMOTE_USER@$REMOTE_HOST" "
-        cd '$REMOTE_DIR'
+        cd '$REMOTE_DIR' 2>/dev/null || exit 1
         total=0
-        for ext in ${BASE_FORMATS[@]} ${OFFICE_FORMATS[@]}; do
+        for ext in pdf png jpg jpeg tiff tif gif webp txt doc docx xls xlsx ppt pptx odt ods odp eml msg rtf; do
             count=\$(find . -maxdepth 1 -type f -iname \"*.\$ext\" 2>/dev/null | wc -l)
             if [ \$count -gt 0 ]; then
                 echo \"  \$ext: \$count Datei(en)\"
@@ -269,7 +301,7 @@ test_run() {
     local file_count=0
     
     for ext in "${BASE_FORMATS[@]}" "${OFFICE_FORMATS[@]}"; do
-        count=$(find "$SOURCE_DIR" -type f \( -iname "*.$ext" \) 2>/dev/null | wc -l)
+        count=$(find "$SOURCE_DIR" -type f -iname "*.$ext" 2>/dev/null | wc -l)
         if [ $count -gt 0 ]; then
             echo "  .$ext: $count Datei(en) gefunden"
             file_count=$((file_count + count))
@@ -281,10 +313,11 @@ test_run() {
     # Zeige ein paar Beispieldateien
     if [ $file_count -gt 0 ]; then
         echo -e "\n${BLUE}Beispiel-Dateien (max. 5):${NC}"
-        find "$SOURCE_DIR" -type f \( \
-            $(printf -- "-iname '*.%s' -o " "${BASE_FORMATS[@]}" "${OFFICE_FORMATS[@]}" | sed 's/ -o $//') \
-        \) -print 2>/dev/null | head -5 | while read file; do
-            echo "  - $(basename "$file")"
+        for ext in "${BASE_FORMATS[@]}" "${OFFICE_FORMATS[@]}"; do
+            find "$SOURCE_DIR" -type f -iname "*.$ext" -print 2>/dev/null | head -5 | while IFS= read -r file; do
+                echo "  - $(basename "$file")"
+                break
+            done
         done
     fi
     
