@@ -211,14 +211,14 @@ sync_documents() {
     while IFS= read -r file; do
         # Entferne führendes ./ und hole nur Dateinamen
         original_filename=$(basename "$file")
-        # Entferne Leerzeichen und Sonderzeichen aus Dateinamen
-        filename=$(echo "$original_filename" | tr ' ' '_' | tr -d '()[]{}' | tr -s '_')
+        # Entferne Leerzeichen und Sonderzeichen aus Dateinamen (inklusive $)
+        filename=$(echo "$original_filename" | tr ' ' '_' | tr -d '()[]{}' | tr -s '_' | sed 's/\$/_/g')
         
         # Zeige Fortschritt
         echo -n "  Kopiere: $original_filename → $filename ... "
         
-        # Kopiere Datei mit rsync
-        rsync -n -av \
+        # Kopiere Datei mit rsync (mit escaping)
+        rsync -av \
             -e "$SSH_CMD" \
             --checksum \
             "$file" \
@@ -229,8 +229,8 @@ sync_documents() {
             ((copied++))
             log_message "Kopiert: $file → $REMOTE_DIR/$filename"
         else
-            # Prüfe ob Datei bereits existiert
-            $SSH_CMD "$REMOTE_USER@$REMOTE_HOST" "test -f '$REMOTE_DIR/$filename'" 2>/dev/null
+            # Prüfe ob Datei bereits existiert (mit escaping)
+            $SSH_CMD "$REMOTE_USER@$REMOTE_HOST" "test -f \"$REMOTE_DIR/$filename\"" 2>/dev/null
             if [ $? -eq 0 ]; then
                 echo -e "${YELLOW}⊘ (existiert bereits)${NC}"
                 ((skipped++))
@@ -242,6 +242,19 @@ sync_documents() {
         fi
     done < "$TEMP_FILE_LIST"
     
+    # Aufräumen
+    rm -f "$TEMP_FILE_LIST"
+    
+    # Zeige Zusammenfassung
+    echo -e "\n${GREEN}=== Synchronisation abgeschlossen ===${NC}"
+    echo -e "  ${GREEN}✓${NC} Kopiert: $copied Datei(en)"
+    echo -e "  ${YELLOW}⊘${NC} Übersprungen: $skipped Datei(en)"
+    if [ $failed -gt 0 ]; then
+        echo -e "  ${RED}✗${NC} Fehler: $failed Datei(en)"
+    fi
+    
+    log_message "Synchronisation abgeschlossen - Kopiert: $copied, Übersprungen: $skipped, Fehler: $failed"
+}    
     # Aufräumen
     rm -f "$TEMP_FILE_LIST"
     
